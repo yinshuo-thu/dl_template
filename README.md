@@ -1,151 +1,162 @@
 # ============================================================
-# PyCaret 回归 AutoML + 回测 + 测试集评估（因子型 X）
-# 前提：你已准备好 X_train, X_test, y_train, y_test
+# 机器学习回归（因子型 X）
+# 模型：RF / GBDT / LightGBM / CatBoost
+# 含调参 + Stacking + OOS 评估
 # ============================================================
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 # ============================================================
-# 1. 拼接 PyCaret 所需 DataFrame
+# 1. sklearn 基础
 # ============================================================
 
-train_df = X_train.copy()
-train_df["target"] = y_train.values
-
-test_df = X_test.copy()
-test_df["target"] = y_test.values
-
-# ============================================================
-# 2. 初始化 PyCaret（回归 + 因子友好 + 回测）
-# ============================================================
-
-from pycaret.regression import *
-
-exp = setup(
-    data=train_df,
-    target="target",
-
-    # ---------- 回测设置 ----------
-    fold=5,
-    fold_strategy="kfold",
-
-    # ---------- 因子友好预处理 ----------
-    normalize=True,
-    normalize_method="zscore",
-
-    transformation=False,
-    handle_unknown_categorical=False,
-
-    remove_multicollinearity=True,
-    multicollinearity_threshold=0.9,
-
-    # ---------- 稳定性 & 性能 ----------
-    session_id=42,
-    n_jobs=-1,
-    silent=True,
-    verbose=True
-)
-
-# ============================================================
-# 3. AutoML：模型对比（CV 回测）
-# ============================================================
-
-best_models = compare_models(
-    sort="RMSE",
-    n_select=5
-)
-
-# 查看交叉验证结果表（回测结果）
-cv_results = pull()
-print("\n===== Cross-Validation Results =====")
-print(cv_results)
-
-# ============================================================
-# 4. 自动调参（Hyperparameter Tuning）
-# ============================================================
-
-tuned_model = tune_model(
-    best_models[0],
-    optimize="RMSE",
-    fold=5,
-    choose_better=True
-)
-
-# ============================================================
-# 5. 集成学习（推荐）
-# ============================================================
-
-# Bagging（稳健）
-bagged_model = ensemble_model(
-    tuned_model,
-    method="Bagging"
-)
-
-# Boosting（可选）
-boosted_model = ensemble_model(
-    tuned_model,
-    method="Boosting"
-)
-
-# Stacking（多模型融合）
-stacked_model = stack_models(best_models)
-
-# ============================================================
-# 6. 最终模型（在全部训练集上重训）
-# ============================================================
-
-final_model = finalize_model(stacked_model)
-
-# ============================================================
-# 7. 测试集预测（真正 Out-of-Sample）
-# ============================================================
-
-test_predictions = predict_model(
-    final_model,
-    data=test_df
-)
-
-print("\n===== Test Predictions Head =====")
-print(test_predictions.head())
-
-# ============================================================
-# 8. 测试集指标评估
-# ============================================================
-
+from sklearn.model_selection import KFold, GridSearchCV
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.ensemble import (
+    RandomForestRegressor,
+    GradientBoostingRegressor,
+    StackingRegressor
+)
+from sklearn.linear_model import Ridge
 
-y_true = test_predictions["target"]
-y_pred = test_predictions["prediction_label"]
+# ============================================================
+# 2. LightGBM & CatBoost
+# ============================================================
 
-rmse = mean_squared_error(y_true, y_pred, squared=False)
-mae = mean_absolute_error(y_true, y_pred)
-r2 = r2_score(y_true, y_pred)
+from lightgbm import LGBMRegressor
+from catboost import CatBoostRegressor
 
-print("\n===== Test Set Performance =====")
+# ============================================================
+# 3. 回测设置（非时间序列；时间序列请换 TimeSeriesSplit）
+# ============================================================
+
+cv = KFold(
+    n_splits=5,
+    shuffle=True,
+    random_state=42
+)
+
+# ============================================================
+# 4. 模型定义（因子型 X → 不需要标准化）
+# ============================================================
+
+models = {
+    "rf": RandomForestRegressor(
+        random_state=42,
+        n_jobs=-1
+    ),
+    "gbr": GradientBoostingRegressor(
+        random_state=42
+    ),
+    "lgbm": LGBMRegressor(
+        objective="regression",
+        random_state=42,
+        n_jobs=-1
+    ),
+    "cat": CatBoostRegressor(
+        loss_function="RMSE",
+        random_state=42,
+        verbose=0
+    )
+}
+
+# ============================================================
+# 5. 超参数空间（因子建模友好、不过度）
+# ============================================================
+
+param_grids = {
+    "rf": {
+        "n_estimators": [300, 600],
+        "max_depth": [None, 6, 10],
+        "min_samples_leaf": [1, 5, 10]
+    },
+    "gbr": {
+        "n_estimators": [300, 600],
+        "learning_rate": [0.01, 0.05, 0.1],
+        "max_depth": [2, 3, 5]
+    },
+    "lgbm": {
+        "n_estimators": [300, 600],
+        "learning_rate": [0.01, 0.05, 0.1],
+        "num_leaves": [31, 63],
+        "max_depth": [-1, 6, 10]
+    },
+    "cat": {
+        "iterations": [300, 600],
+        "learning_rate": [0.01, 0.05, 0.1],
+        "depth": [4, 6, 8]
+    }
+}
+
+# ============================================================
+# 6. 单模型调参 + CV
+# ============================================================
+
+best_models = {}
+
+for name, model in models.items():
+    print(f"\n===== Tuning {name.upper()} =====")
+
+    search = GridSearchCV(
+        estimator=model,
+        param_grid=param_grids[name],
+        scoring="neg_root_mean_squared_error",
+        cv=cv,
+        n_jobs=-1
+    )
+
+    search.fit(X_train, y_train)
+
+    best_models[name] = search.best_estimator_
+
+    print("Best params:", search.best_params_)
+    print("CV RMSE:", -search.best_score_)
+
+# ============================================================
+# 7. 构建 Stacking 模型（核心）
+# ============================================================
+
+stacking_model = StackingRegressor(
+    estimators=[
+        ("rf", best_models["rf"]),
+        ("gbr", best_models["gbr"]),
+        ("lgbm", best_models["lgbm"]),
+        ("cat", best_models["cat"])
+    ],
+    final_estimator=Ridge(alpha=1.0),
+    cv=cv,
+    n_jobs=-1
+)
+
+print("\n===== Training Stacking Model =====")
+stacking_model.fit(X_train, y_train)
+
+# ============================================================
+# 8. OOS 测试集评估
+# ============================================================
+
+y_pred = stacking_model.predict(X_test)
+
+rmse = mean_squared_error(y_test, y_pred, squared=False)
+mae = mean_absolute_error(y_test, y_pred)
+r2 = r2_score(y_test, y_pred)
+
+print("\n===== OOS Test Performance =====")
 print(f"RMSE: {rmse:.6f}")
 print(f"MAE : {mae:.6f}")
 print(f"R2  : {r2:.6f}")
 
 # ============================================================
-# 9. 回测诊断 & 因子效果可视化
+# 9. 单模型 OOS 对比
 # ============================================================
 
-evaluate_model(final_model)
+print("\n===== Individual Model OOS Performance =====")
 
-# 常用诊断图（可按需注释）
-plot_model(final_model, plot="residuals")
-plot_model(final_model, plot="prediction_error")
-plot_model(final_model, plot="feature")
-
-# ============================================================
-# 10. 保存 & 加载模型
-# ============================================================
-
-save_model(final_model, "pycaret_factor_reg_model")
-
-# 需要时加载
-# loaded_model = load_model("pycaret_factor_reg_model")
+for name, model in best_models.items():
+    pred = model.predict(X_test)
+    rmse = mean_squared_error(y_test, pred, squared=False)
+    print(f"{name.upper():6s} RMSE: {rmse:.6f}")
 
 # ============================================================
 # END
