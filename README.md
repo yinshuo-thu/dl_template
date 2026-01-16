@@ -1,5 +1,56 @@
-meta = pd.read_csv("meta_data.csv")
+123# Normalize df column ids once
+df_cols_norm = {c: _norm_curve_id(c) for c in df.columns}
 
+# Convert thermal_ids to a set once (speed + avoid repeated casting)
+thermal_id_set = set(map(_norm_curve_id, thermal_ids))
+
+# Match thermal columns in df
+thermal_df_cols = [c for c, cn in df_cols_norm.items() if cn in thermal_id_set]
+
+print("Thermal IDs in meta:", len(thermal_ids))
+print("Thermal cols matched in df:", len(thermal_df_cols))
+
+# Ensure numeric before summation (prevents string concatenation / NaN issues)
+df_num = df.copy()
+for c in thermal_df_cols:
+    df_num[c] = pd.to_numeric(df_num[c], errors="coerce")
+
+# Compute thermal total safely
+if len(thermal_df_cols) > 0:
+    thermal_total = df_num[thermal_df_cols].sum(axis=1, min_count=1)
+else:
+    thermal_total = pd.Series(0.0, index=df.index)
+
+# Build rename map
+rename_map = {}
+for c in df.columns:
+    cn = df_cols_norm[c]
+    new_name = id2name.get(cn, "")
+    if new_name:
+        rename_map[c] = new_name
+
+df_named = df.rename(columns=rename_map)
+
+# Align index explicitly (prevents silent misalignment)
+thermal_total = thermal_total.reindex(df_named.index)
+
+# Add the thermal total column (avoid collisions)
+thermal_total_col = "Thermal power (total)"
+if thermal_total_col in df_named.columns:
+    thermal_total_col = thermal_total_col + "_derived"
+
+df_named[thermal_total_col] = thermal_total
+
+# Optional but strongly recommended: merge duplicated columns after renaming
+# (Use sum; change to mean if that better matches your semantics)
+if df_named.columns.duplicated().any():
+    df_named = df_named.groupby(level=0, axis=1).sum()
+
+df_named.to_csv("data.csv", index=True)
+print("Saved data.csv; shape =", df_named.shape)
+print("Thermal sub-columns used for total:", len(thermal_df_cols))
+
+123
 
 def _norm_curve_id(x):
     """Normalize curve-id / column names for robust matching (e.g., 123 vs '123' vs '123.0')."""
