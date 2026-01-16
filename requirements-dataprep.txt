@@ -1,0 +1,25 @@
+# EDA 分析所需的基础包
+pandas>=1.5.0
+numpy>=1.23.0
+matplotlib>=3.6.0
+seaborn>=0.12.0
+scipy>=1.9.0
+statsmodels>=0.13.0
+
+# Jupyter Notebook 支持
+jupyter>=1.0.0
+ipykernel>=6.0.0
+notebook>=6.0.0
+
+# 自动化EDA工具（可选，根据需要安装）
+# 注意：此文件使用 dataprep 替代 ydata-profiling（避免 pydantic 版本冲突）
+# ydata-profiling>=4.0.0  # 已注释：与 dataprep 冲突（需要 pydantic>=2）
+sweetviz>=2.1.0  # 推荐安装
+dataprep>=0.4.0  # 使用此替代 ydata-profiling（需要 pydantic<2.0）
+autoviz>=0.1.0  # 可选
+
+# 自动化特征工程工具（可选，根据需要安装）
+featuretools>=1.0.0  # 自动化特征工程
+tsfresh>=0.20.0  # 时间序列特征提取
+autofeat>=2.0.0  # 自动特征工程
+
